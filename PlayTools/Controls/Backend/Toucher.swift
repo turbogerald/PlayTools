@@ -27,8 +27,7 @@ class Toucher {
                 return
             }
             tid = -1
-            keyWindow = screen.keyWindow
-            keyView = keyWindow!.hitTest(point, with: nil)
+            (keyWindow, keyView) = touchedWindow(at: point)
         } else if tid == nil {
             return
         }
@@ -43,6 +42,27 @@ class Toucher {
         }
         DebugModel.instance.record(point: point, phase: phase, tid: recordId,
                                    description: actionName + "(" + keyName + ")")
+    }
+
+    /**
+     iPadOS sends a touch to the topmost visible window under it, not to the key window. Apps that show sheets in
+     a separate window without making it key rely on that, so do the same and fall back to the key window.
+     Windows of a scene all fill the scene on macOS, so they share the key window's coordinates.
+     */
+    private static func touchedWindow(at point: CGPoint) -> (UIWindow?, UIView?) {
+        guard let key = screen.keyWindow else {
+            return (nil, nil)
+        }
+        let windows = (key.windowScene?.windows ?? [key]).enumerated()
+            .sorted { ($0.element.windowLevel.rawValue, $0.offset) > ($1.element.windowLevel.rawValue, $1.offset) }
+            .map { $0.element }
+        // hitTest is nil for hidden, transparent and non-interactive windows
+        for window in windows {
+            if let view = window.hitTest(point, with: nil) {
+                return (window, view)
+            }
+        }
+        return (key, key.hitTest(point, with: nil))
     }
 
     static func setupLogfile() {
