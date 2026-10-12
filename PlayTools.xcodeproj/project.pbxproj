@@ -85,6 +85,7 @@
 		B444BB0D2F49C1D100ADCC5A /* ControllerFocus.m in Sources */ = {isa = PBXBuildFile; fileRef = B444BB0B2F49C1D100ADCC5A /* ControllerFocus.m */; };
 		B46C02C72C634AB5007637AB /* BatteryLevel.m in Sources */ = {isa = PBXBuildFile; fileRef = B46C02C62C634AB5007637AB /* BatteryLevel.m */; };
 		B66E65002C936EA100E48FD0 /* PlayedAppleDBConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = B66E64FF2C936E9800E48FD0 /* PlayedAppleDBConstants.swift */; };
+		B66E65102C936EA100E48FD0 /* PlayedAppleCertificates.swift in Sources */ = {isa = PBXBuildFile; fileRef = B66E650F2C936E9800E48FD0 /* PlayedAppleCertificates.swift */; };
 		B6D774FF2ACFC3D900C0D9D8 /* SwordRPC in Frameworks */ = {isa = PBXBuildFile; productRef = B6D774FE2ACFC3D900C0D9D8 /* SwordRPC */; };
 		D04B12CA2EF6F3DD008FEC14 /* MediaVolume.m in Sources */ = {isa = PBXBuildFile; fileRef = D04B12C92EF6F3DD008FEC14 /* MediaVolume.m */; };
 		EEB248592B81D074000C230A /* PlayedAppleDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB248582B81D074000C230A /* PlayedAppleDB.swift */; };
@@ -188,6 +189,7 @@
 		B46C02C62C634AB5007637AB /* BatteryLevel.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = BatteryLevel.m; sourceTree = "<group>"; };
 		B46C02C82C634C60007637AB /* BatteryLevel.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BatteryLevel.h; sourceTree = "<group>"; };
 		B66E64FF2C936E9800E48FD0 /* PlayedAppleDBConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayedAppleDBConstants.swift; sourceTree = "<group>"; };
+		B66E650F2C936E9800E48FD0 /* PlayedAppleCertificates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayedAppleCertificates.swift; sourceTree = "<group>"; };
 		D04B12C92EF6F3DD008FEC14 /* MediaVolume.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MediaVolume.m; sourceTree = "<group>"; };
 		D04B12CC2EF6F3F9008FEC14 /* MediaVolume.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MediaVolume.h; sourceTree = "<group>"; };
 		EEB248582B81D074000C230A /* PlayedAppleDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayedAppleDB.swift; sourceTree = "<group>"; };
@@ -544,6 +546,7 @@
 			isa = PBXGroup;
 			children = (
 				B66E64FF2C936E9800E48FD0 /* PlayedAppleDBConstants.swift */,
+				B66E650F2C936E9800E48FD0 /* PlayedAppleCertificates.swift */,
 				ABCECEE529750BA600746595 /* PlayedApple.swift */,
 				EEB248582B81D074000C230A /* PlayedAppleDB.swift */,
 				AB7DA47429B85BFB0034ACB2 /* PlayShadow.m */,
@@ -751,6 +754,7 @@
 				AA7197A2287A481500623C15 /* CircleMenu.swift in Sources */,
 				954389CE2B39F26600B063BB /* ElementView.swift in Sources */,
 				B66E65002C936EA100E48FD0 /* PlayedAppleDBConstants.swift in Sources */,
+				B66E65102C936EA100E48FD0 /* PlayedAppleCertificates.swift in Sources */,
 				9562D15A2AB4FBBB002C329D /* TransparentKeyboardEventAdapter.swift in Sources */,
 				AA71978B287A480D00623C15 /* MenuController.swift in Sources */,
 				9562D1732AB52416002C329D /* EditorKeyboardEventAdapter.swift in Sources */,

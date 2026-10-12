@@ -14,7 +14,7 @@ import Security
 
 public class PlayKeychain: NSObject {
     static let shared = PlayKeychain()
-    private static let playChainDB = PlayKeychainDB.shared
+    static let playChainDB = PlayKeychainDB.shared
 
     @objc public static func debugLogger(_ logContent: String) {
         if PlaySettings.shared.settingsData.playChainDebugging {
@@ -22,7 +22,7 @@ public class PlayKeychain: NSObject {
         }
     }
 
-    private static func flag(_ dictionary: NSDictionary, _ key: CFString) -> Bool {
+    static func flag(_ dictionary: NSDictionary, _ key: CFString) -> Bool {
         let value = dictionary[key as String]
         if let value = value as? Bool {
             return value
@@ -37,6 +37,11 @@ public class PlayKeychain: NSObject {
     // SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result)
     @objc static public func add(_ attributes: NSDictionary,
                                  result: UnsafeMutablePointer<Unmanaged<CFTypeRef>?>?) -> OSStatus {
+        if let ref = attributes[kSecValueRef as String], CFGetTypeID(ref as CFTypeRef) == SecIdentityGetTypeID() {
+            return addIdentity(attributes, identity: ref as! SecIdentity, // swiftlint:disable:this force_cast
+                               result: result)
+        }
+        let attributes = withPasswordDefaults(normalizedReference(attributes))
         guard let keychainDict = playChainDB.insert(attributes) else {
             debugLogger("Failed to write keychain file")
             return errSecIO
@@ -83,6 +88,15 @@ public class PlayKeychain: NSObject {
             return errSecSuccess
         }
 
+        if attributes["class"] as? String == "cert" {
+            guard let certificateData = vData as? Data,
+                  let certificate = SecCertificateCreateWithData(nil, certificateData as CFData) else {
+                return errSecBadReq
+            }
+            result?.pointee = Unmanaged.passRetained(certificate)
+            return errSecSuccess
+        }
+
         if attributes["class"] as? String == "keys" {
             if let keyDataValue = vData as? Data {
                 // kSecAttrKeyType is stored as `type` in the dictionary
@@ -110,6 +124,8 @@ public class PlayKeychain: NSObject {
 
     // SecItemUpdate(CFDictionaryRef query, CFDictionaryRef attributesToUpdate)
     @objc static public func update(_ query: NSDictionary, attributesToUpdate: NSDictionary) -> OSStatus {
+        let query = storageQuery(query)
+        let attributesToUpdate = normalizedReference(attributesToUpdate)
         guard let keychainDict = playChainDB.query(query)?.first else {
             debugLogger("Keychain item not found in db")
             return errSecItemNotFound
@@ -134,6 +150,7 @@ public class PlayKeychain: NSObject {
 
     // SecItemDelete(CFDictionaryRef query)
     @objc static public func delete(_ query: NSDictionary) -> OSStatus {
+        let query = storageQuery(query)
         guard playChainDB.query(query)?.first != nil else {
             debugLogger("Failed to find keychain item")
             return errSecItemNotFound
@@ -149,111 +166,97 @@ public class PlayKeychain: NSObject {
     @objc static public func keyCreateRandomKey(_ parameters: NSDictionary,
                                                 error: UnsafeMutablePointer<Unmanaged<CFError>?>?)
     -> Unmanaged<SecKey>? {
-        // Check if kSecAttrIsPermanent is set to 1 in kSecPrivateKeyAttrs.
-        // If it is, set it to 0 before fowarding the call to SecKeyCreateRandomKey,
-        // and then add the key to the keychain db with the original attributes (with kSecAttrIsPermanent set to 1)
-        var privateKeyAttrs = parameters[kSecPrivateKeyAttrs as String] as? [String: Any] ?? [:]
-        let isPermanent = privateKeyAttrs[kSecAttrIsPermanent as String] as? Bool ?? false
-        if isPermanent {
-            privateKeyAttrs[kSecAttrIsPermanent as String] = false
-        }
-        var parametersCopy = parameters as! [String: Any] // swiftlint:disable:this force_cast
-        parametersCopy[kSecPrivateKeyAttrs as String] = privateKeyAttrs
-        var error: Unmanaged<CFError>?
-        guard let key = SecKeyCreateRandomKey(parametersCopy as CFDictionary, &error) else {
-            debugLogger("Failed to create random key: \(error!.takeRetainedValue())")
+        let request = inMemoryKeyParameters(parameters)
+        guard let key = SecKeyCreateRandomKey(request.parameters as CFDictionary, error) else {
+            debugLogger("Failed to create random key")
             return nil
         }
-        if isPermanent {
-            // Add the key to the keychain db with the original attributes
-            var keychainDict = [String: Any]()
-            keychainDict[kSecClass as String] = kSecClassKey
-            keychainDict[kSecAttrKeyType as String] = parameters[kSecAttrKeyType as String]
-            keychainDict[kSecAttrKeyClass as String] = parameters[kSecAttrKeyClass as String]
-            keychainDict["type"] = parameters[kSecAttrKeyType as String]
-            keychainDict["kcls"] = parameters[kSecAttrKeyClass as String]
-            keychainDict["v_Data"] = SecKeyCopyExternalRepresentation(key, nil) as? Data
-            keychainDict["r_Attributes"] = 1
-            guard playChainDB.insert(keychainDict as NSDictionary) != nil else {
-                debugLogger("Failed to write keychain file")
-                return nil
-            }
+        if request.isPermanent && !storeKey(key, parameters: parameters, keyAttributes: kSecPrivateKeyAttrs) {
+            debugLogger("Failed to write keychain file")
+            error?.pointee = Unmanaged.passRetained(CFErrorCreate(nil, kCFErrorDomainOSStatus, CFIndex(errSecIO), nil))
+            return nil
         }
         return Unmanaged.passRetained(key)
     }
 
-    // swiftlint:disable:next function_body_length
     @objc static public func keyGeneratePair(_ parameters: NSDictionary,
                                              publicKey: UnsafeMutablePointer<Unmanaged<SecKey>?>?,
                                              privateKey: UnsafeMutablePointer<Unmanaged<SecKey>?>?) -> OSStatus {
-        // Same as above but we need to disable kSecAttrIsPermanent for both the public and private key.
-        var isPermanent = parameters[kSecAttrIsPermanent as String] as? Bool ?? false
-        var privateKeyAttrs = parameters[kSecPrivateKeyAttrs as String] as? [String: Any] ?? [:]
-        let isPrivatePermanent = privateKeyAttrs[kSecAttrIsPermanent as String] as? Bool ?? false
-        if isPrivatePermanent {
-            privateKeyAttrs[kSecAttrIsPermanent as String] = false
-            isPermanent = true
-        }
-        var publicKeyAttrs = parameters[kSecPublicKeyAttrs as String] as? [String: Any] ?? [:]
-        let isPublicPermanent = (publicKeyAttrs[kSecAttrIsPermanent as String] as? Bool) ?? false
-        if isPublicPermanent {
-            publicKeyAttrs[kSecAttrIsPermanent as String] = false
-            isPermanent = true
-        }
-        var parametersCopy = parameters as! [String: Any] // swiftlint:disable:this force_cast
-        parametersCopy.removeValue(forKey: kSecAttrIsPermanent as String)
-        parametersCopy[kSecPrivateKeyAttrs as String] = privateKeyAttrs
-        parametersCopy[kSecPublicKeyAttrs as String] = publicKeyAttrs
+        let request = inMemoryKeyParameters(parameters)
         var newPublicKey: SecKey?
         var newPrivateKey: SecKey?
-        guard SecKeyGeneratePair(parametersCopy as CFDictionary, &newPublicKey, &newPrivateKey) == 0 else {
+        let status = SecKeyGeneratePair(request.parameters as CFDictionary, &newPublicKey, &newPrivateKey)
+        guard status == errSecSuccess, let newPublicKey = newPublicKey, let newPrivateKey = newPrivateKey else {
             debugLogger("Failed to generate key pair.")
-            return errSecMissingEntitlement
+            return status == errSecSuccess ? errSecMissingEntitlement : status
         }
-        if let newPublicKey = newPublicKey {
-            publicKey?.pointee = Unmanaged.passRetained(newPublicKey)
-        }
-        if let newPrivateKey = newPrivateKey {
-            privateKey?.pointee = Unmanaged.passRetained(newPrivateKey)
-        }
-        if isPermanent {
-            // Add the keys to the keychain db with the original attributes
-            let publicKeyRef = newPublicKey
-            let privateKeyRef = newPrivateKey
-            var publicKeyDict = [String: Any]()
-            publicKeyDict[kSecClass as String] = kSecClassKey
-            publicKeyDict[kSecAttrKeyType as String] = parameters[kSecAttrKeyType as String]
-            publicKeyDict[kSecAttrKeyClass as String] = kSecAttrKeyClassPublic
-            publicKeyDict["type"] = parameters[kSecAttrKeyType as String]
-            publicKeyDict["kcls"] = kSecAttrKeyClassPublic
-            publicKeyDict["v_Data"] = SecKeyCopyExternalRepresentation(publicKeyRef!, nil) as? Data
-            publicKeyDict["r_Attributes"] = 1
-            guard playChainDB.insert(publicKeyDict as NSDictionary) != nil else {
-                debugLogger("Failed to write public key to keychain db")
-                return errSecMissingEntitlement
-            }
-            var privateKeyDict = [String: Any]()
-            privateKeyDict[kSecClass as String] = kSecClassKey
-            privateKeyDict[kSecAttrKeyType as String] = parameters[kSecAttrKeyType as String]
-            privateKeyDict[kSecAttrKeyClass as String] = kSecAttrKeyClassPrivate
-            privateKeyDict["type"] = parameters[kSecAttrKeyType as String]
-            privateKeyDict["kcls"] = kSecAttrKeyClassPrivate
-            privateKeyDict["v_Data"] = SecKeyCopyExternalRepresentation(privateKeyRef!, nil) as? Data
-            privateKeyDict["r_Attributes"] = 1
-            guard playChainDB.insert(privateKeyDict as NSDictionary) != nil else {
-                debugLogger("Failed to write private key to keychain db")
-                return errSecMissingEntitlement
+        if request.isPermanent {
+            guard storeKey(newPublicKey, parameters: parameters, keyAttributes: kSecPublicKeyAttrs),
+                  storeKey(newPrivateKey, parameters: parameters, keyAttributes: kSecPrivateKeyAttrs) else {
+                debugLogger("Failed to write key pair to keychain db")
+                return errSecIO
             }
         }
+        publicKey?.pointee = Unmanaged.passRetained(newPublicKey)
+        privateKey?.pointee = Unmanaged.passRetained(newPrivateKey)
         return errSecSuccess
+    }
+
+    // Persistent keys are generated in memory and stored in PlayChain afterwards.
+    // PlayChain keeps the key's bytes, which a Secure Enclave key never exposes,
+    // so a persistent Secure Enclave key is generated as a software key.
+    private static func inMemoryKeyParameters(_ parameters: NSDictionary)
+    -> (parameters: [String: Any], isPermanent: Bool) {
+        var request = parameters as? [String: Any] ?? [:]
+        var isPermanent = flag(parameters, kSecAttrIsPermanent)
+        request.removeValue(forKey: kSecAttrIsPermanent as String)
+        for keyAttributes in [kSecPrivateKeyAttrs as String, kSecPublicKeyAttrs as String] {
+            guard var attributes = request[keyAttributes] as? [String: Any] else { continue }
+            isPermanent = isPermanent || flag(attributes as NSDictionary, kSecAttrIsPermanent)
+            attributes[kSecAttrIsPermanent as String] = false
+            request[keyAttributes] = attributes
+        }
+        if isPermanent && request[kSecAttrTokenID as String] as? String == kSecAttrTokenIDSecureEnclave as String {
+            request.removeValue(forKey: kSecAttrTokenID as String)
+            if var attributes = request[kSecPrivateKeyAttrs as String] as? [String: Any] {
+                attributes.removeValue(forKey: kSecAttrAccessControl as String)
+                request[kSecPrivateKeyAttrs as String] = attributes
+            }
+        }
+        return (request, isPermanent)
+    }
+
+    // Stores a generated key like SecItemAdd would, with the attributes apps look it up by.
+    private static func storeKey(_ key: SecKey, parameters: NSDictionary, keyAttributes: CFString) -> Bool {
+        let attributes = parameters[keyAttributes as String] as? [String: Any] ?? [:]
+        let item = NSMutableDictionary()
+        item[kSecValueRef as String] = key
+        for attribute in [kSecAttrApplicationTag, kSecAttrApplicationLabel, kSecAttrLabel] {
+            item[attribute as String] = attributes[attribute as String] ?? parameters[attribute as String]
+        }
+        item[kSecAttrKeyType as String] = parameters[kSecAttrKeyType as String]
+        item[kSecAttrKeySizeInBits as String] = parameters[kSecAttrKeySizeInBits as String]
+        let keyItem = normalizedReference(item)
+        guard keyItem[kSecValueData as String] != nil else {
+            debugLogger("Key cannot be exported for storage")
+            return false
+        }
+        return playChainDB.insert(keyItem) != nil
     }
 }
 
 extension PlayKeychain {
     // SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
-    // swiftlint:disable:next function_body_length
     @objc static public func copyMatching(_ query: NSDictionary,
                                           result: UnsafeMutablePointer<Unmanaged<CFTypeRef>?>?) -> OSStatus {
+        if isCertificateOrIdentity(query) {
+            return copyCertificateMatching(query, result: result)
+        }
+        return copyItemMatching(query, result: result)
+    }
+
+    private static func copyItemMatching(_ query: NSDictionary,
+                                         result: UnsafeMutablePointer<Unmanaged<CFTypeRef>?>?) -> OSStatus {
         guard let keychainDicts = playChainDB.query(query),
               let keychainDict = keychainDicts.first else {
             debugLogger("Keychain item not found in db")
@@ -307,22 +310,31 @@ extension PlayKeychain {
             // Check the class type, if it is a key we need to return the data
             // as SecKeyRef, otherwise we can return it as a CFTypeRef
             if classType == "keys" {
-                // kSecAttrKeyType is stored as `type` in the dictionary
-                // kSecAttrKeyClass is stored as `kcls` in the dictionary
-                let keyAttributes = [
-                    kSecAttrKeyType: keychainDict[kSecAttrKeyType] as! CFString, // swiftlint:disable:this force_cast
-                    kSecAttrKeyClass: keychainDict[kSecAttrKeyClass] as! CFString // swiftlint:disable:this force_cast
-                ]
-                let keyData = vData as! Data // swiftlint:disable:this force_cast
-                let key = SecKeyCreateWithData(keyData as CFData, keyAttributes as CFDictionary, nil)
-                result?.pointee = Unmanaged.passRetained(key!)
-                return errSecSuccess
+                return copyKey(keychainDict, keyData: vData, result: result)
             }
             result?.pointee = Unmanaged.passRetained(vData as CFTypeRef)
             return errSecSuccess
         }
 
         return errSecItemNotFound
+    }
+
+    // kSecAttrKeyType is stored as `type` and kSecAttrKeyClass as `kcls` in the dictionary
+    private static func copyKey(_ keychainDict: NSMutableDictionary, keyData: Any,
+                                result: UnsafeMutablePointer<Unmanaged<CFTypeRef>?>?) -> OSStatus {
+        guard let keyType = keychainDict[kSecAttrKeyType] as? String,
+              let keyClass = keychainDict[kSecAttrKeyClass] as? String,
+              let keyData = keyData as? Data else {
+            debugLogger("Stored key cannot be rebuilt")
+            return errSecDecode
+        }
+        let keyAttributes = [kSecAttrKeyType: keyType, kSecAttrKeyClass: keyClass] as CFDictionary
+        guard let key = SecKeyCreateWithData(keyData as CFData, keyAttributes, nil) else {
+            debugLogger("Stored key cannot be rebuilt")
+            return errSecDecode
+        }
+        result?.pointee = Unmanaged.passRetained(key)
+        return errSecSuccess
     }
 
     private static func copyAllMatches(_ keychainDicts: [NSMutableDictionary], query: NSDictionary,
@@ -376,8 +388,12 @@ extension PlayKeychain {
             kSecAttrKeyClass: keychainDict[kSecAttrKeyClass] ?? kSecAttrKeyClassPublic
         ] as CFDictionary
 
-        let secKey = SecKeyCreateWithData(key as! CFData, dummyKeyAttrs, nil) // swiftlint:disable:this force_cast
-        result?.pointee = Unmanaged.passRetained(secKey!)
+        guard let keyData = key as? Data,
+              let secKey = SecKeyCreateWithData(keyData as CFData, dummyKeyAttrs, nil) else {
+            debugLogger("Stored key cannot be rebuilt")
+            return errSecDecode
+        }
+        result?.pointee = Unmanaged.passRetained(secKey)
         return errSecSuccess
     }
 }
