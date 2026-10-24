@@ -107,6 +107,10 @@ struct PlayedAppleDBConstants {
             kSecAttrPublicKeyHash
         ]
     ]
+    // Non-primary attributes that queries filter on when present (certificates are looked up by label).
+    static let matchable = [
+        kSecAttrLabel
+    ]
     static let values = [
         kSecValueData,
         kSecValueRef,

@@ -130,6 +130,33 @@ __attribute__((visibility("hidden")))
     return 0;
 }
 
+// A view controller that reports no supported orientations (mask 0) is tolerated on iPadOS, but on macOS its window
+// gets no valid interface orientation and draws its content rotated. Such a controller follows the scene instead.
+static void PTFixEmptyOrientationMask(Class cls) {
+    static NSMutableSet<Class> *checkedClasses;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ checkedClasses = [NSMutableSet set]; });
+    @synchronized (checkedClasses) {
+        if ([checkedClasses containsObject:cls]) return;
+        [checkedClasses addObject:cls];
+    }
+    SEL sel = @selector(supportedInterfaceOrientations);
+    Method method = class_getInstanceMethod(cls, sel);
+    IMP original = method_getImplementation(method);
+    if (original == class_getMethodImplementation([UIViewController class], sel)) return;
+    IMP replacement = imp_implementationWithBlock(^UIInterfaceOrientationMask(id controller) {
+        UIInterfaceOrientationMask mask = ((UIInterfaceOrientationMask (*)(id, SEL))original)(controller, sel);
+        return mask ? mask : UIInterfaceOrientationMaskAll;
+    });
+    // Adds an override when the method is inherited, so the superclass stays untouched
+    class_replaceMethod(cls, sel, replacement, method_getTypeEncoding(method));
+}
+
+- (void) hook_setRootViewController:(UIViewController *)rootViewController {
+    if (rootViewController) PTFixEmptyOrientationMask([rootViewController class]);
+    [self hook_setRootViewController:rootViewController];
+}
+
 - (double) hook_nativeScale {
     return [[PlaySettings shared] customScaler];
 }
@@ -334,6 +361,7 @@ bool menuWasCreated = false;
     
     [objc_getClass("_UIMenuBuilder") swizzleInstanceMethod:sel_getUid("initWithRootMenu:") withMethod:@selector(initWithRootMenuHook:)];
     [objc_getClass("IOSViewController") swizzleInstanceMethod:@selector(prefersPointerLocked) withMethod:@selector(hook_prefersPointerLocked)];
+    [objc_getClass("UIWindow") swizzleInstanceMethod:@selector(setRootViewController:) withMethod:@selector(hook_setRootViewController:)];
     // Set idiom to iPad
     // [objc_getClass("UIDevice") swizzleInstanceMethod:@selector(userInterfaceIdiom) withMethod:@selector(hook_userInterfaceIdiom)];
     // [objc_getClass("UITraitCollection") swizzleInstanceMethod:@selector(userInterfaceIdiom) withMethod:@selector(hook_userInterfaceIdiom)];
